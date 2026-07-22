@@ -1,0 +1,2365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>IBM Partner Selection — Decision Tree</title>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+<style>
+/* ── Reset & base ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; }
+body {
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  background: #f0f2f5; color: #1f2328;
+  min-height: 100vh;
+  display: flex; flex-direction: column;
+  /* never let body-level content force a horizontal scrollbar */
+  overflow-x: hidden;
+}
+
+/* ── Application header ── */
+.topbar {
+  background: #fff; border-bottom: 1px solid #e0e2e6;
+  padding: 16px 28px;
+  /* min-height keeps the bar tall; no max-height so content never clips */
+  min-height: 80px;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px;
+  position: sticky; top: 0; z-index: 100;
+  flex-shrink: 0;
+  /* header itself must not overflow the viewport */
+  overflow: hidden;
+}
+.topbar-left {
+  display: flex; flex-direction: column; gap: 4px;
+  /* allow left side to shrink when viewport is narrow */
+  min-width: 0; flex: 1 1 0;
+  overflow: hidden;
+}
+.hdr-title {
+  font-size: 38px; font-weight: 700;
+  line-height: 1.1; letter-spacing: -.5px;
+  /* allow wrapping on narrow windows instead of overflowing */
+  white-space: normal; word-break: break-word;
+  overflow-wrap: break-word;
+}
+.hdr-title .t-maximo { color: #0f62fe; }
+.hdr-title .t-rest   { color: #161616; }
+.hdr-sub {
+  font-size: 15px; font-weight: 400; color: #525252;
+  line-height: 1.4; margin: 0;
+  word-break: break-word; overflow-wrap: break-word;
+}
+.topbar-right {
+  display: flex; align-items: center; gap: 10px;
+  flex-shrink: 0;
+  /* right controls never grow beyond their natural width */
+  min-width: 0;
+}
+.search-wrap { position: relative; }
+.search-wrap input {
+  padding: 7px 12px 7px 32px; border-radius: 6px;
+  border: 1px solid #d1d5db; font-size: 12.5px;
+  outline: none; background: #f9fafb; width: 220px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.search-wrap input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+.search-wrap .search-icon {
+  position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
+  width: 14px; height: 14px; stroke: #9ca3af; fill: none;
+  pointer-events: none;
+}
+#search-results {
+  position: absolute; top: 110%; left: 0; right: 0;
+  background: #fff; border: 1px solid #e0e2e6; border-radius: 7px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.1); z-index: 200;
+  max-height: 260px; overflow-y: auto;
+  /* never wider than the search input; never scroll horizontally */
+  overflow-x: hidden;
+  display: none;
+}
+#search-results .sr-item {
+  padding: 9px 14px; cursor: pointer; font-size: 12px;
+  border-bottom: 1px solid #f3f4f6; transition: background .1s;
+  /* content wraps; never pushes dropdown wider */
+  min-width: 0; overflow: hidden;
+}
+#search-results .sr-item:last-child { border-bottom: none; }
+#search-results .sr-item:hover { background: #eff6ff; }
+#search-results .sr-item .sr-name {
+  font-weight: 700; color: #1f2328;
+  /* very long partner names wrap inside dropdown */
+  word-break: break-word; overflow-wrap: break-word;
+  white-space: normal;
+}
+#search-results .sr-item .sr-meta {
+  color: #6b7280; font-size: 11px; margin-top: 1px;
+  word-break: break-word; overflow-wrap: break-word;
+  white-space: normal;
+}
+
+/* ── Tier badges (used in partner cards and modal) ── */
+.tier { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 9.5px; font-weight: 700; color: #fff; white-space: nowrap; }
+.t-p  { background: #1f2328; }
+.t-g  { background: #92400e; }
+.t-s  { background: #6b7280; }
+.t-sp { background: #5b21b6; }
+.t-u  { background: #9ca3af; color: #1f2328; }
+
+/* ── Reset button ── */
+.reset-btn {
+  padding: 5px 14px;
+  font-size: 11.5px; font-weight: 600;
+  color: #57606a; background: #fff;
+  border: 1.5px solid #d1d5db; border-radius: 6px;
+  cursor: pointer; transition: border-color .15s, color .15s;
+  white-space: nowrap;
+}
+.reset-btn:hover { border-color: #ef4444; color: #ef4444; }
+
+/* ── Journey canvas ── */
+#flow-area {
+  flex: 1; overflow-x: auto;
+  /* visible on y-axis so tall nodes are never clipped */
+  overflow-y: auto;
+  background: #f0f2f5;
+  display: flex; align-items: flex-start;
+  padding: 40px 48px 60px;
+  cursor: default;
+}
+#flow-columns {
+  display: flex; flex-direction: row;
+  align-items: flex-start;
+  gap: 0;
+  min-width: max-content;
+  /* nodes establish their own fixed widths; row must not shrink them */
+}
+
+/* ── Journey node (replaces flow-col) ── */
+.jnode {
+  display: flex; flex-direction: column;
+  width: 280px; min-width: 0; flex-shrink: 0;
+  /* hard max-width prevents any child from stretching the node */
+  max-width: 280px;
+  animation: nodeIn .28s cubic-bezier(.22,.68,0,1.2) both;
+}
+.jnode.jnode-wide  { width: 320px; max-width: 320px; }
+.jnode.jnode-wider { width: 360px; max-width: 360px; }
+
+@keyframes nodeIn {
+  from { opacity: 0; transform: translateX(24px) scale(.97); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+/* Node card shell — white card with shadow */
+.jcard {
+  background: #fff;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px 18px 14px;
+  box-shadow: 0 2px 12px rgba(0,0,0,.07), 0 0 0 0 rgba(59,130,246,0);
+  transition: box-shadow .2s, border-color .2s;
+  position: relative;
+  /* card must never expand beyond its parent node width */
+  width: 100%; min-width: 0; overflow: hidden;
+}
+
+/* ── Node states ── */
+/* ACTIVE — current decision point */
+.jnode.is-active .jcard {
+  border-color: #3b82f6;
+  box-shadow: 0 4px 20px rgba(59,130,246,.14), 0 0 0 3px rgba(59,130,246,.10);
+}
+/* DONE — completed step */
+.jnode.is-done .jcard {
+  border-color: #d1fae5;
+  background: #f8fffe;
+  box-shadow: 0 1px 6px rgba(0,0,0,.05);
+}
+/* RESULT — partner / summary terminal */
+.jnode.is-result .jcard {
+  border-color: #1d4ed8;
+  box-shadow: 0 4px 24px rgba(29,78,216,.15), 0 0 0 3px rgba(29,78,216,.08);
+}
+
+/* Node header row */
+.jnode-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px;
+}
+.jnode-step {
+  font-size: 9px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .11em; color: #94a3b8;
+}
+.jnode-step-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: #e0e7ff; color: #3730a3;
+  font-size: 10px; font-weight: 800;
+}
+.jnode.is-done .jnode-step-badge {
+  background: #d1fae5; color: #065f46;
+}
+.jnode.is-active .jnode-step-badge {
+  background: #3b82f6; color: #fff;
+}
+
+/* Completed value badge inside a done node */
+.jnode-done-value {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: #eff6ff; border: 1px solid #bfdbfe;
+  border-radius: 999px; padding: 4px 12px;
+  font-size: 12px; font-weight: 700; color: #1d4ed8;
+  margin-bottom: 8px; cursor: pointer;
+  transition: background .15s;
+  /* prevent long values from overflowing the card */
+  max-width: 100%; overflow: hidden;
+  white-space: normal; word-break: break-word;
+}
+.jnode-done-value:hover { background: #dbeafe; }
+.jnode-done-value .dv-check { color: #22c55e; font-size: 12px; margin-right: 2px; flex-shrink: 0; }
+.jnode-done-hint {
+  font-size: 10.5px; color: #94a3b8;
+  word-break: break-word;
+}
+
+/* Active node question */
+.jnode-question {
+  font-size: 12px; font-weight: 700; color: #1e293b;
+  margin-bottom: 10px; line-height: 1.4;
+  word-break: break-word;
+}
+
+/* Goal search bar inside the goal node */
+.jnode-search {
+  display: flex; align-items: center;
+  background: #f8fafc; border: 1px solid #e2e8f0;
+  border-radius: 7px; padding: 6px 10px;
+  margin-bottom: 10px; gap: 6px;
+}
+.jnode-search input {
+  border: none; outline: none; background: transparent;
+  font-size: 11.5px; color: #374151; width: 100%;
+}
+.jnode-search-icon { color: #94a3b8; font-size: 13px; flex-shrink: 0; }
+
+/* Scrollable option list inside active node */
+.jnode-options {
+  max-height: 280px; overflow-y: auto;
+  margin: 0 -4px; padding: 0 4px;
+  scrollbar-width: thin; scrollbar-color: #e2e8f0 transparent;
+}
+.jnode-options::-webkit-scrollbar { width: 4px; }
+.jnode-options::-webkit-scrollbar-track { background: transparent; }
+.jnode-options::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 4px; }
+
+/* Individual option chip */
+.jopt {
+  display: flex; align-items: flex-start;
+  background: #f8fafc; border: 1.5px solid #e2e8f0;
+  border-radius: 8px; padding: 9px 12px;
+  margin-bottom: 6px; cursor: pointer; user-select: none;
+  font-size: 12px; font-weight: 600; color: #374151;
+  line-height: 1.4;
+  transition: border-color .15s, background .15s, color .15s, box-shadow .15s;
+  /* label wraps; never clips or expands the card */
+  width: 100%; min-width: 0;
+  word-break: break-word; white-space: normal;
+  text-align: left;
+}
+.jopt:last-child { margin-bottom: 0; }
+.jopt:hover {
+  border-color: #3b82f6; background: #eff6ff; color: #1d4ed8;
+  box-shadow: 0 0 0 2px rgba(59,130,246,.10);
+}
+.jopt.jopt-selected {
+  border-color: #3b82f6; background: #eff6ff; color: #1d4ed8;
+}
+.jopt-check { color: #22c55e; font-size: 13px; margin-right: 7px; flex-shrink: 0; margin-top: 1px; }
+
+/* ── Arrow connector between nodes ── */
+.jconnector {
+  display: flex; align-items: flex-start;
+  padding-top: 56px;
+  width: 36px; flex-shrink: 0;
+}
+.jconnector svg { display: block; }
+
+/* Experience connector — offset to align with active partner card */
+.jconnector.exp-conn-0 { padding-top: 140px; }
+.jconnector.exp-conn-1 { padding-top: 340px; }
+
+/* ── Current Selection bar ── */
+#selection-bar {
+  background: #fff; border-bottom: 1px solid #e0e2e6;
+  padding: 8px 24px;
+  display: flex; align-items: center; gap: 8px;
+  min-height: 38px; flex-wrap: wrap;
+  /* last-resort: if pills still overflow, bar scrolls not the page */
+  overflow-x: auto;
+}
+.sel-label {
+  font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .1em; color: #b0b7c3; white-space: nowrap;
+  margin-right: 4px; flex-shrink: 0;
+}
+.sel-pill {
+  display: inline-flex; align-items: center;
+  font-size: 11px; font-weight: 600; color: #1d4ed8;
+  background: #eff6ff; border: 1px solid #bfdbfe;
+  border-radius: 999px; padding: 3px 11px;
+  cursor: pointer; transition: background .12s;
+  /* long goal/industry labels wrap inside the pill */
+  max-width: 280px; word-break: break-word;
+  white-space: normal; line-height: 1.4;
+}
+.sel-pill:hover { background: #dbeafe; }
+.sel-pill-sep {
+  color: #d1d5db; font-size: 13px; margin: 0 1px;
+  user-select: none; flex-shrink: 0;
+}
+.sel-empty { font-size: 11px; color: #b0b7c3; font-style: italic; }
+
+/* ── Divider inside done node separating selection from remaining options ── */
+.jnode-divider { height: 1px; background: #e2e8f0; margin: 6px 0 8px; }
+
+/* ── Question heading (kept for summary/partner columns) ── */
+.q-heading {
+  font-size: 11.5px; font-weight: 700; color: #1f2328;
+  margin-bottom: 10px; padding: 0;
+  word-break: break-word; overflow-wrap: break-word;
+}
+
+/* ── Legacy aliases so partner/summary/exp columns still render ── */
+.flow-col { display: flex; flex-direction: column; flex-shrink: 0; min-width: 0; animation: nodeIn .28s cubic-bezier(.22,.68,0,1.2) both; }
+.flow-col[data-depth="0"] { width: 280px; max-width: 280px; }
+.flow-col:last-child      { width: 299px; max-width: 299px; }
+.partner-col              { width: 360px !important; max-width: 360px !important; }
+.summary-col              { width: 299px !important; max-width: 299px !important; }
+.exp-col                  { width: 276px !important; max-width: 276px !important; }
+.next-step-col            { width: 260px !important; max-width: 260px !important; }
+.col-connector { display: none; }  /* replaced by jconnector */
+.col-label {
+  font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .1em; color: #94a3b8;
+  padding: 0 0 8px; margin-bottom: 6px;
+  border-bottom: 1px solid #e2e8f0;
+  word-break: break-word;
+}
+
+/* ── Partner cards ── */
+.p-card {
+  background: #fff;
+  border: 1.5px solid #d1d5db;
+  border-radius: 10px;
+  padding: 20px 22px;
+  margin-bottom: 18px;
+  cursor: pointer;
+  transition: box-shadow .18s, transform .18s;
+  user-select: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,.07);
+  /* card must never expand beyond column width */
+  width: 100%; min-width: 0; overflow: hidden;
+}
+.p-card:hover {
+  box-shadow: 0 6px 20px rgba(0,0,0,.13);
+  transform: translateY(-2px);
+}
+/* Recommended Partner card — blue left border accent */
+.p-card:first-of-type {
+  border: 2px solid #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59,130,246,.10), 0 2px 10px rgba(0,0,0,.08);
+}
+/* Partner name — primary visual anchor */
+.p-card .p-name {
+  font-size: 20px; font-weight: 800; color: #0f172a;
+  line-height: 1.2; margin-bottom: 0;
+  letter-spacing: -.01em;
+  /* long partner names must wrap, not overflow */
+  word-break: break-word; overflow-wrap: break-word;
+  white-space: normal;
+}
+/* Tier badge inside name row */
+.p-card .p-name .tier {
+  font-size: 9px; font-weight: 700; vertical-align: middle;
+  position: relative; top: -1px; margin-left: 6px;
+  opacity: .75; white-space: nowrap;
+}
+/* Row that holds name + tier — sits between rank badge and highlights */
+.p-name-row { margin-bottom: 14px; margin-top: 2px; min-width: 0; }
+.p-card .p-why  { font-size: 11px; color: #374151; line-height: 1.4; margin-top: 4px; word-break: break-word; overflow-wrap: break-word; }
+/* ── Partner card footer actions ── */
+.p-card-actions {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #e0e2e6;
+  display: flex; align-items: center; gap: 0;
+  /* wrap if action labels are very long */
+  flex-wrap: wrap; row-gap: 4px;
+  min-width: 0;
+}
+.p-btn {
+  font-size: 12px; font-weight: 500; color: #3b82f6;
+  cursor: pointer; background: none; border: none;
+  padding: 0; letter-spacing: 0;
+  transition: color .12s;
+  user-select: none;
+  text-decoration: none;
+  /* button text wraps; never pushes card wider */
+  word-break: break-word; min-width: 0;
+  white-space: normal;
+}
+.p-btn:hover { color: #1d4ed8; text-decoration: underline; }
+.p-btn-divider {
+  width: 1px; height: 12px; background: #d1d5db;
+  margin: 0 10px; flex-shrink: 0;
+}
+/* Active state — Customer References open */
+.p-btn-secondary.p-btn-active { color: #15803d; }
+.p-btn-secondary.p-btn-active:hover { color: #166534; }
+/* Partner card highlight when its experience column is open */
+.p-card.p-exp-active { border-color: #16a34a; box-shadow: 0 0 0 3px rgba(22,163,74,.10), 0 2px 10px rgba(0,0,0,.07); }
+/* Relevant Experience section labels */
+.exp-section-label {
+  font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .08em; color: #9ca3af; margin-bottom: 4px;
+  word-break: break-word;
+}
+
+/* ── Ranking badges — subordinate label above partner name ── */
+.rank-badge {
+  display: inline-block; font-size: 9px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .09em;
+  padding: 2px 8px; border-radius: 3px; margin-bottom: 6px;
+  opacity: .85;
+  /* badges wrap text, never push card wider */
+  max-width: 100%; word-break: break-word; white-space: normal;
+}
+.rank-best { background: #dbeafe; color: #1d4ed8; }
+.rank-alt  { background: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; }
+
+/* ── Partner Highlights ── */
+.p-why-title {
+  font-size: 9px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .09em; color: #b0b7c3; margin-top: 0; margin-bottom: 5px;
+}
+.p-chip-wrap {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  /* must stay within card; never push card wider */
+  width: 100%; min-width: 0;
+}
+.p-chip {
+  display: inline-block;
+  font-size: 10px; font-weight: 500; color: #3b6fd4;
+  background: #f0f5ff; border: 1px solid #c7d9f8;
+  border-radius: 20px; padding: 2px 9px;
+  line-height: 1.4;
+  /* chips wrap; long text wraps within the chip */
+  white-space: normal; word-break: break-word;
+  max-width: 100%;
+}
+
+/* ── Match Summary card ── */
+.summary-col { width: 299px; max-width: 299px; flex-shrink: 0; min-width: 0; animation: colIn .22s ease; }
+.summary-card {
+  background: #fff; border: 1.5px solid #3b82f6;
+  border-radius: 10px; padding: 16px;
+  box-shadow: 0 0 0 3px rgba(59,130,246,.08);
+  width: 100%; min-width: 0; overflow: hidden;
+}
+.summary-col .col-label { border-bottom: 1px solid #e0e2e6; padding-bottom: 8px; margin-bottom: 12px; }
+.summary-row { margin-bottom: 12px; min-width: 0; }
+.summary-row:last-child { margin-bottom: 0; }
+.summary-row-label {
+  font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .08em; color: #9ca3af; margin-bottom: 2px;
+}
+.summary-row-value {
+  font-size: 12.5px; font-weight: 600; color: #1f2328; line-height: 1.35;
+  word-break: break-word; overflow-wrap: break-word;
+}
+.summary-ibm-badge {
+  display: inline-block; margin-top: 2px;
+  font-size: 10px; font-weight: 700; color: #1d4ed8;
+  background: #eff6ff; border: 1px solid #bfdbfe;
+  border-radius: 4px; padding: 2px 7px;
+  word-break: break-word; max-width: 100%;
+}
+
+
+/* ── Next Step prompt column ── */
+.next-step-col { width: 253px; flex-shrink: 0; }
+.exp-trigger-card {
+  background: #f8faff; border: 2px dashed #93c5fd;
+  border-radius: 10px; padding: 18px 16px;
+  cursor: pointer; transition: background .15s, border-color .15s;
+  user-select: none;
+}
+.exp-trigger-card:hover { background: #eff6ff; border-color: #3b82f6; }
+.exp-trigger-eyebrow {
+  font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .09em; color: #9ca3af; margin-bottom: 8px;
+  word-break: break-word;
+}
+.exp-trigger-title {
+  font-size: 13px; font-weight: 700; color: #1d4ed8;
+  line-height: 1.35; margin-bottom: 6px;
+  word-break: break-word; overflow-wrap: break-word;
+}
+.exp-trigger-desc {
+  font-size: 11px; color: #57606a; line-height: 1.5; margin-bottom: 10px;
+  word-break: break-word; overflow-wrap: break-word;
+}
+.exp-trigger-btn {
+  display: inline-block;
+  font-size: 11.5px; font-weight: 700; color: #fff;
+  background: #1d4ed8; border-radius: 6px;
+  padding: 6px 14px; letter-spacing: .01em;
+  max-width: 100%; word-break: break-word;
+}
+
+/* ── Relevant Experience column ── */
+.exp-col { width: 276px; max-width: 276px; flex-shrink: 0; min-width: 0; }
+/* Vertical offset so exp column aligns with the active partner card */
+.exp-col.exp-col-0 { margin-top: 88px;  }   /* first card  */
+.exp-col.exp-col-1 { margin-top: 288px; }   /* second card */
+.exp-card {
+  background: #fff; border: 1.5px solid #e0e2e6;
+  border-radius: 10px; padding: 16px 18px;
+  width: 100%; min-width: 0; overflow: hidden;
+}
+.exp-partner-name {
+  font-size: 11px; font-weight: 700; color: #1d4ed8;
+  text-transform: uppercase; letter-spacing: .06em;
+  margin-bottom: 10px; padding-bottom: 8px;
+  border-bottom: 1px solid #e0e2e6;
+  word-break: break-word;
+}
+.exp-list {
+  list-style: none; padding: 0; margin: 0 0 16px 0;
+}
+.exp-list li {
+  font-size: 12px; color: #374151; line-height: 1.55;
+  padding: 3px 0 3px 16px; position: relative;
+  word-break: break-word; overflow-wrap: break-word;
+}
+.exp-list li::before {
+  content: "•"; position: absolute; left: 0;
+  color: #3b82f6; font-weight: 700;
+}
+.exp-card + .exp-card { margin-top: 12px; }
+.exp-no-match {
+  font-size: 11px; color: #9ca3af; font-style: italic; margin-top: 4px;
+  word-break: break-word;
+}
+
+/* ── Modal overlay ── */
+#modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(15,15,15,.45);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 500; opacity: 0; pointer-events: none;
+  transition: opacity .2s;
+}
+#modal-overlay.open { opacity: 1; pointer-events: all; }
+
+/* ── Modal drawer ── */
+#modal {
+  background: #fff; border-radius: 12px;
+  width: 560px; max-width: 96vw;
+  max-height: 88vh; overflow-y: auto; overflow-x: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,.22);
+  transform: translateY(24px) scale(.97);
+  transition: transform .22s ease;
+  padding: 28px 28px 32px;
+}
+#modal-overlay.open #modal { transform: translateY(0) scale(1); }
+
+.modal-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; gap: 12px; }
+.modal-name   { font-size: 20px; font-weight: 700; color: #1f2328; word-break: break-word; overflow-wrap: break-word; min-width: 0; }
+.modal-focus  { font-size: 12px; color: #6b7280; margin-top: 2px; word-break: break-word; }
+.modal-close  {
+  background: none; border: none; cursor: pointer;
+  width: 30px; height: 30px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: #6b7280; font-size: 18px; flex-shrink: 0;
+  transition: background .15s;
+}
+.modal-close:hover { background: #f3f4f6; }
+
+.modal-section { margin-bottom: 18px; min-width: 0; overflow: hidden; }
+.modal-section-title {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+  color: #9ca3af; margin-bottom: 7px; padding-bottom: 5px;
+  border-bottom: 1px solid #f3f4f6;
+  word-break: break-word;
+}
+.modal-section p { font-size: 13px; color: #374151; line-height: 1.6; word-break: break-word; overflow-wrap: break-word; }
+.modal-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.modal-tag {
+  font-size: 11px; padding: 3px 9px;
+  background: #f3f4f6; color: #374151;
+  border: 1px solid #e5e7eb; border-radius: 999px;
+  /* tags wrap text; never overflow */
+  word-break: break-word; max-width: 100%;
+  white-space: normal;
+}
+.modal-contact {
+  background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;
+  padding: 12px 14px; min-width: 0; overflow: hidden;
+}
+.modal-contact .mc-name  { font-weight: 700; font-size: 13px; color: #1f2328; word-break: break-word; }
+.modal-contact .mc-role  { font-size: 11.5px; color: #6b7280; margin-top: 1px; word-break: break-word; }
+.modal-contact .mc-email {
+  display: inline-block; margin-top: 6px; font-size: 12px;
+  color: #1d4ed8; text-decoration: none;
+  background: #eff6ff; padding: 3px 9px; border-radius: 5px;
+  /* long email addresses must wrap, not overflow the modal */
+  word-break: break-all; max-width: 100%;
+}
+.modal-contact .mc-email:hover { background: #dbeafe; }
+.modal-divider { border: none; border-top: 1px solid #f3f4f6; margin: 16px 0; }
+
+/* ── Splash screen ── */
+#splash {
+  position: fixed; inset: 0; z-index: 1000;
+  background: #f5f8ff;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  cursor: pointer;
+  overflow: hidden;
+  opacity: 0;
+  animation: splashFadeIn .9s ease forwards;
+  transition: opacity 600ms ease;
+}
+#splash.splash-hidden { opacity: 0 !important; pointer-events: none; }
+
+@keyframes splashFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* Canvas sits behind content */
+#splash-canvas {
+  position: absolute; inset: 0;
+  pointer-events: none;
+}
+
+/* Soft radial gradient orbs — purely CSS, no images */
+.splash-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(64px);
+  opacity: 0;
+  animation: orbDrift linear infinite;
+  pointer-events: none;
+}
+.splash-orb-1 {
+  width: 520px; height: 520px;
+  background: radial-gradient(circle, rgba(15,98,254,.13) 0%, transparent 70%);
+  top: -120px; left: -100px;
+  animation-duration: 22s; animation-delay: 0s;
+  opacity: .9;
+}
+.splash-orb-2 {
+  width: 400px; height: 400px;
+  background: radial-gradient(circle, rgba(15,98,254,.09) 0%, transparent 70%);
+  bottom: -80px; right: -60px;
+  animation-duration: 28s; animation-delay: -7s;
+  opacity: .85;
+}
+.splash-orb-3 {
+  width: 300px; height: 300px;
+  background: radial-gradient(circle, rgba(100,149,255,.10) 0%, transparent 70%);
+  top: 40%; left: 55%;
+  animation-duration: 34s; animation-delay: -14s;
+  opacity: .7;
+}
+.splash-orb-4 {
+  width: 240px; height: 240px;
+  background: radial-gradient(circle, rgba(15,98,254,.07) 0%, transparent 70%);
+  top: 20%; right: 15%;
+  animation-duration: 26s; animation-delay: -4s;
+  opacity: .75;
+}
+.splash-orb-5 {
+  width: 180px; height: 180px;
+  background: radial-gradient(circle, rgba(200,220,255,.18) 0%, transparent 70%);
+  bottom: 25%; left: 10%;
+  animation-duration: 30s; animation-delay: -18s;
+  opacity: .8;
+}
+
+@keyframes orbDrift {
+  0%   { transform: translate(0,   0)   scale(1);    }
+  25%  { transform: translate(18px,-22px) scale(1.04); }
+  50%  { transform: translate(-12px, 16px) scale(.97); }
+  75%  { transform: translate(22px,  10px) scale(1.02); }
+  100% { transform: translate(0,   0)   scale(1);    }
+}
+
+/* Content layer */
+.splash-inner {
+  position: relative; z-index: 2;
+  display: flex; flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0;
+  max-width: 560px; width: 100%;
+  padding: 0 24px;
+  animation: contentRise .95s cubic-bezier(.22,.68,0,1) .25s both;
+}
+@keyframes contentRise {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.splash-ibm {
+  font-size: 11px; font-weight: 700; letter-spacing: .22em;
+  text-transform: uppercase; color: #0f62fe;
+  margin-bottom: 22px;
+  opacity: .75;
+  word-break: break-word;
+}
+.splash-title {
+  font-size: 46px; font-weight: 700;
+  line-height: 1.08; letter-spacing: -.6px;
+  color: #161616;
+  margin-bottom: 16px;
+  word-break: break-word; overflow-wrap: break-word;
+}
+.splash-title .s-maximo { color: #0f62fe; }
+.splash-subtitle {
+  font-size: 16px; font-weight: 400; color: #4a5568;
+  line-height: 1.55;
+  margin-bottom: 36px;
+  word-break: break-word; overflow-wrap: break-word;
+}
+.splash-rule {
+  width: 36px; height: 2px;
+  background: linear-gradient(90deg, #0f62fe, #4d90fe);
+  border-radius: 2px;
+  margin-bottom: 36px;
+}
+.splash-cta {
+  font-size: 12px; font-weight: 500;
+  color: #0f62fe; letter-spacing: .06em;
+  text-transform: uppercase;
+  animation: ctaPulse 3.2s ease-in-out infinite;
+}
+@keyframes ctaPulse {
+  0%,100% { opacity: .55; }
+  50%      { opacity: 1;   }
+}
+.splash-footer {
+  margin-top: 40px;
+  font-size: 11px; color: #a0aec0;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+/* ── App wrapper: hidden until splash dismissed ── */
+#app-wrap {
+  display: flex; flex-direction: column;
+  flex: 1; min-height: 0;
+  opacity: 0;
+  transition: opacity 600ms ease;
+  pointer-events: none;
+}
+#app-wrap.app-visible {
+  opacity: 1;
+  pointer-events: all;
+}
+
+</style>
+</head>
+<body>
+
+<!-- ── Splash screen ── -->
+<div id="splash">
+  <!-- ambient orbs -->
+  <div class="splash-orb splash-orb-1"></div>
+  <div class="splash-orb splash-orb-2"></div>
+  <div class="splash-orb splash-orb-3"></div>
+  <div class="splash-orb splash-orb-4"></div>
+  <div class="splash-orb splash-orb-5"></div>
+  <!-- dot-network canvas -->
+  <canvas id="splash-canvas"></canvas>
+  <!-- content -->
+  <div class="splash-inner">
+    <div class="splash-ibm">IBM</div>
+    <h1 class="splash-title"><span class="s-maximo">Maximo</span> Business Partner Advisor</h1>
+    <p class="splash-subtitle">Find the right Maximo Business Partner for your opportunity</p>
+    <div class="splash-rule"></div>
+    <div class="splash-cta">Click anywhere to continue</div>
+    <div class="splash-footer">
+      Created by Jacqueline Bui<br/>
+      BTSS Intern &bull; Summer 2026
+    </div>
+  </div>
+</div>
+
+<!-- ── App wrapper ── -->
+<div id="app-wrap">
+
+<!-- ── Application header ── -->
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="hdr-title"><span class="t-maximo">Maximo</span> <span class="t-rest">Business Partner Advisor</span></div>
+    <div class="hdr-sub">Identify the best-fit Maximo Business Partner based on industry, use case, and expertise.</div>
+  </div>
+  <div class="topbar-right">
+    <div class="search-wrap">
+      <svg class="search-icon" viewBox="0 0 16 16"><circle cx="6.5" cy="6.5" r="4.5" stroke-width="1.5"/><line x1="10.5" y1="10.5" x2="14" y2="14" stroke-width="1.5" stroke-linecap="round"/></svg>
+      <input type="text" id="partner-search" placeholder="Search partners..." autocomplete="off"/>
+      <div id="search-results"></div>
+    </div>
+    <button class="reset-btn" id="reset-btn" onclick="resetFlow()">&#8635; Start Over</button>
+  </div>
+</div>
+
+<!-- ── Current Selection bar ── -->
+<div id="selection-bar"><span class="sel-empty">Select a goal to begin</span></div>
+
+<!-- ── Flow area ── -->
+<div id="flow-area">
+  <div id="flow-columns"></div>
+</div>
+
+<!-- ── Modal ── -->
+<div id="modal-overlay">
+  <div id="modal">
+    <div class="modal-header">
+      <div>
+        <div class="modal-name" id="m-name"></div>
+        <div class="modal-focus" id="m-focus"></div>
+      </div>
+      <button class="modal-close" id="modal-close-btn">&#x2715;</button>
+    </div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<footer style="padding:14px 28px;border-top:1px solid #e0e2e6;text-align:center;font-size:11px;color:#9ca3af;">
+  Made with IBM Bob
+</footer>
+
+</div><!-- /#app-wrap -->
+
+<script>
+// ═══════════════════════════════════════════════════
+// PARTNER DATA  — populated at runtime from Maximo BP Master.xlsx
+// ═══════════════════════════════════════════════════
+var PARTNERS = {};
+
+// ── removed static data ── (kept only for reference; no longer used)
+var _PARTNERS_REMOVED = {
+  "Cohesive Solutions": {
+    tier: "Platinum", tierClass: "t-p",
+    focus: "Enterprise Asset Management",
+    products: ["Maximo Application Suite"],
+    industries: ["Utilities","Energy","Government","Manufacturing"],
+    capabilities: ["Implementations","Asset Health","Scheduler","MRO optimization","Reliability"],
+    strengths: ["Largest Maximo EAM practice","Capital investment planning","MRO and inventory optimization","Multi-site enterprise deployments"],
+    certifications: ["IBM Platinum Partner","MAS Certified"],
+    geography: "North America",
+    contact: { name: "Kevin Sutherland", role: "Business Development", email: "kevin.sutherland@cohesivesolutions.com" },
+    notes: "Best fit for large-scale Maximo deployments in energy, utilities, and government.",
+    winStoriesByIndustry: {
+      "Utilities":       ["Duke Energy","Southern Power","WBI Energy","Puget Sound Energy"],
+      "Energy":          ["Southern Power","WBI Energy","Tallgrass Energy","Crestwood Midstream"],
+      "Government":      ["York Region","City of Calgary","Province of Ontario","BC Hydro"],
+      "Manufacturing":   ["Caterpillar","Oshkosh Corporation","Flowserve","Domtar"],
+      "_fallback":       ["Duke Energy","York Region","Caterpillar","Southern Power","WBI Energy"]
+    }
+  },
+  "Starboard Consulting": {
+    tier: "Gold", tierClass: "t-g",
+    focus: "Maximo Asset & Inspection Services",
+    products: ["Maximo Application Suite"],
+    industries: ["Government","Public Sector","Utilities"],
+    capabilities: ["Implementations","GIS","Mobile","Field Service","Hosting","Inspection"],
+    strengths: ["GIS-integrated inspections","Field service engagement","Cloud hosting","Government EAM"],
+    certifications: ["IBM Gold Partner"],
+    geography: "North America",
+    contact: { name: "Bill Thompson", role: "Partner Lead", email: "wthompson@starboard-consulting.com" },
+    notes: "Strong for field service, inspection, and managed services in government and utilities.",
+    winStoriesByIndustry: {
+      "Government":      ["York Region","City of Toronto","State of Michigan","Maricopa County"],
+      "Public Sector":   ["State of Michigan","City of Toronto","Maricopa County","Port Authority NY/NJ"],
+      "Utilities":       ["Puget Sound Energy","BC Hydro","National Fuel Gas","Fortis BC"],
+      "_fallback":       ["York Region","Puget Sound Energy","City of Toronto","State of Michigan"]
+    }
+  },
+  "SMS": {
+    tier: "Platinum", tierClass: "t-p",
+    focus: "Industrial Asset & ESG Management",
+    products: ["Maximo Application Suite","Envizi","TRIRIGA"],
+    industries: ["Oil & Gas","Aerospace","Industrial","Manufacturing"],
+    capabilities: ["Industrial Operations","Calibration","Asset Health","Inspection","ESG reporting","Emissions tracking","Decarbonization"],
+    strengths: ["Industrial operations depth","Calibration expertise","Scope 1-3 emissions","Asset performance management"],
+    certifications: ["IBM Platinum Partner"],
+    geography: "North America, EMEA",
+    contact: { name: "Steve Rendall", role: "Partner Lead", email: "rendalls@sms-inc.net" },
+    notes: "Ideal for O&G, aerospace, and industrial environments requiring compliance and ESG capabilities.",
+    winStoriesByIndustry: {
+      "Oil & Gas":       ["Chevron","Cheniere Energy","Hess Corporation","Gibson Energy"],
+      "Aerospace":       ["Raytheon Technologies","L3 Technologies","StandardAero","MHI Aviation"],
+      "Industrial":      ["Emerson Electric","Schneider Electric","Honeywell","Parker Hannifin"],
+      "Manufacturing":   ["Arconic","Baker Hughes","Chart Industries","Flowserve"],
+      "_fallback":       ["Chevron","Cheniere Energy","Raytheon Technologies","Emerson Electric","Baker Hughes"]
+    }
+  },
+  "Maven Asset Mgmt": {
+    tier: "Silver", tierClass: "t-s",
+    focus: "Asset Management & ESG Services",
+    products: ["Maximo Application Suite","Envizi"],
+    industries: ["Utilities","Energy","Airports","Manufacturing","Healthcare"],
+    capabilities: ["Mobile","Managed Services","ESG data","Emissions tracking","ESG planning"],
+    strengths: ["Mobile workforce management","Envizi ESG data integration","Mid-market managed services","ESG planning and forecasting"],
+    certifications: ["IBM Silver Partner"],
+    geography: "North America",
+    contact: { name: "Ananth Subramanian", role: "Partner Lead", email: "ananth.s@mavenasset.com" },
+    notes: "Right-sized managed services for airports, utilities, and mid-market manufacturing with ESG capabilities.",
+    winStoriesByIndustry: {
+      "Utilities":       ["Pacific Gas & Electric","Consumers Energy","Unitil","Avangrid"],
+      "Energy":          ["Calpine Corporation","Vistra Energy","NRG Energy","Eversource"],
+      "Airports":        ["Denver International Airport","Dallas Fort Worth Airport","Austin-Bergstrom Airport"],
+      "Manufacturing":   ["Haynes International","Greenbrier Companies","Chart Industries"],
+      "Healthcare":      ["Kaiser Permanente","Providence Health","Atrium Health"],
+      "_fallback":       ["Denver International Airport","Pacific Gas & Electric","Calpine Corporation","Kaiser Permanente"]
+    }
+  },
+  "ZPro Solutions": {
+    tier: "Gold", tierClass: "t-g",
+    focus: "Maximo Modernization & Field Services",
+    products: ["Maximo Application Suite"],
+    industries: ["Utilities","Transportation","Oil & Gas"],
+    capabilities: ["Asset performance management","Field Service","GIS","Analytics","AI/ML"],
+    strengths: ["APM analytics and AI/ML","Field service engagement","GIS and spatial analytics","MAS modernization"],
+    certifications: ["IBM Gold Partner"],
+    geography: "North America",
+    contact: { name: "Mubasher Ali", role: "Sales", email: "mubasher.ali@zprosolutions.com" },
+    notes: "Go-to for APM, field service engagement, and GIS-enabled use cases.",
+    winStoriesByIndustry: {
+      "Utilities":       ["Consolidated Edison","PPL Electric","Xcel Energy","Ameren"],
+      "Transportation":  ["Norfolk Southern","BNSF Railway","Port of Los Angeles","MTA New York"],
+      "Oil & Gas":       ["Williams Companies","Targa Resources","DCP Midstream","Kinder Morgan"],
+      "_fallback":       ["Consolidated Edison","Norfolk Southern","Williams Companies","Xcel Energy"]
+    }
+  },
+  "CoSol": {
+    tier: "Partner", tierClass: "t-u",
+    focus: "Asset Management & MRO Consulting",
+    products: ["MIO","Maximo Application Suite"],
+    industries: ["Mining","Infrastructure","Utilities"],
+    capabilities: ["Reliability","MRO optimization","Asset Management"],
+    strengths: ["Mining industry expertise","Reliability-centered maintenance","MRO inventory optimization","Asset-intensive infrastructure"],
+    certifications: ["IBM Partner"],
+    geography: "North America, APAC",
+    contact: { name: "Mateo Canarte-Toro", role: "Partner Lead", email: "mateo.canarte@cosol.global" },
+    notes: "Specialized in asset-intensive industries including mining and infrastructure.",
+    winStoriesByIndustry: {
+      "Mining":          ["BHP Billiton","Freeport-McMoRan","Newmont Corporation","Teck Resources"],
+      "Infrastructure":  ["Jacobs Engineering","AECOM","Parsons Corporation","Black & Veatch"],
+      "Utilities":       ["Hydro One","Manitoba Hydro","SaskPower","NB Power"],
+      "_fallback":       ["BHP Billiton","Newmont Corporation","Jacobs Engineering","Hydro One"]
+    }
+  },
+  "JLL": {
+    tier: "Gold", tierClass: "t-g",
+    focus: "Lease Management, Space Management & ESG",
+    products: ["TRIRIGA","Envizi"],
+    industries: ["Real Estate","Finance","Retail","Government","Healthcare"],
+    capabilities: ["Lease administration","Lease accounting","Lease compliance","Portfolio lease management","Space planning","Occupancy management","Space utilization","Facilities space optimization","ESG reporting","Decarbonization","ESG planning"],
+    strengths: ["Full TRIRIGA lease and space management","Net-zero and decarbonization programs","GRI/SASB/SEC ESG reporting","Portfolio-scale real estate management"],
+    certifications: ["IBM Gold Partner","Envizi Certified"],
+    geography: "Global",
+    contact: { name: "Taylor Smeriglio", role: "Alliance", email: "Taylor.Smeriglio@jll.com" },
+    notes: "Best choice for lease management, space optimization, and ESG across real estate portfolios.",
+    winStoriesByIndustry: {
+      "Real Estate":     ["Brookfield Asset Management","CBRE","Prologis","Boston Properties"],
+      "Finance":         ["Goldman Sachs","JPMorgan Chase","Wells Fargo","Prudential Financial"],
+      "Retail":          ["Target Corporation","Walgreens","CVS Health","Dollar General"],
+      "Government":      ["GSA Federal Portfolio","City of New York","Los Angeles County","State of Texas"],
+      "Healthcare":      ["HCA Healthcare","CommonSpirit Health","Mayo Clinic","Cleveland Clinic"],
+      "_fallback":       ["Brookfield Asset Management","Goldman Sachs","GSA Federal Portfolio","HCA Healthcare","Target Corporation"]
+    }
+  },
+  "Trescope": {
+    tier: "Specialist", tierClass: "t-sp",
+    focus: "Lease & Space Management",
+    products: ["TRIRIGA"],
+    industries: ["Government","Education","Healthcare","Manufacturing"],
+    capabilities: ["Lease administration","Portfolio lease management","Space planning","Occupancy management","Space utilization","Facilities space optimization","Data Migration"],
+    strengths: ["TRIRIGA-only specialist","Government IWMS experience","Lease and space management","Data migration expertise"],
+    certifications: ["IBM TRIRIGA Specialist"],
+    geography: "North America",
+    contact: { name: "Letto Thomas", role: "Sales", email: "letto@trescope.com" },
+    notes: "The strongest TRIRIGA specialist for government and education lease and space management.",
+    winStoriesByIndustry: {
+      "Government":      ["Department of Veterans Affairs","State of Georgia","City of Phoenix","Nassau County"],
+      "Education":       ["Purdue University","University of Michigan","Texas A&M University","UCLA"],
+      "Healthcare":      ["Ascension Health","Banner Health","Dignity Health","Sentara Healthcare"],
+      "Manufacturing":   ["3M","Honeywell","Rockwell Automation","Emerson Electric"],
+      "_fallback":       ["Purdue University","Department of Veterans Affairs","Ascension Health","3M"]
+    }
+  },
+  "llama llc": {
+    tier: "Silver", tierClass: "t-s",
+    focus: "TRIRIGA Lease & Compliance",
+    products: ["TRIRIGA"],
+    industries: ["Government","Education","Federal"],
+    capabilities: ["Lease administration","Lease accounting","Lease compliance","Portfolio lease management","Hosting","Managed Support"],
+    strengths: ["TRIRIGA cloud hosting","Public sector lease compliance","Managed upgrade services","Government compliance"],
+    certifications: ["IBM Silver Partner"],
+    geography: "North America",
+    contact: { name: "Ahren Lembke-Windler", role: "Partner Lead", email: "ahrenlw@llama.io" },
+    notes: "Focused on TRIRIGA lease management and compliance for state, local, and federal government.",
+    winStoriesByIndustry: {
+      "Government":      ["State of Virginia","County of San Diego","City of Austin","State of Colorado"],
+      "Education":       ["George Mason University","Virginia Tech","University of Virginia","NC State University"],
+      "Federal":         ["Department of Energy","Department of Defense","GSA","USDA"],
+      "_fallback":       ["State of Virginia","George Mason University","Department of Energy","County of San Diego"]
+    }
+  }
+}; // end _PARTNERS_REMOVED
+
+// ═══════════════════════════════════════════════════
+// DECISION TREE  (Goal → Industry)
+// Application is derived automatically from goal — never a user selection.
+// ═══════════════════════════════════════════════════
+
+// Goal metadata: maps goal label → IBM Application + IBM Product
+var GOAL_META = {
+  "Enterprise asset management":          { app: "Maintenance",            product: "Maximo Application Suite" },
+  "Reliability-centered maintenance":     { app: "Maintenance",            product: "Maximo Application Suite" },
+  "Asset performance management":         { app: "Maintenance",            product: "Maximo Application Suite" },
+  "Field service engagement":             { app: "Maintenance",            product: "Maximo Application Suite" },
+  "Asset inspection":                     { app: "Inspection",             product: "Maximo Application Suite" },
+  "Capital & asset investment planning":  { app: "Capital Planning",       product: "Maximo Application Suite" },
+  "MRO inventory optimization":           { app: "Inventory Optimization", product: "MIO / Maximo"             },
+  "Lease administration":                 { app: "Lease Management",       product: "TRIRIGA"                  },
+  "Lease accounting":                     { app: "Lease Management",       product: "TRIRIGA"                  },
+  "Lease compliance":                     { app: "Lease Management",       product: "TRIRIGA"                  },
+  "Portfolio lease management":           { app: "Lease Management",       product: "TRIRIGA"                  },
+  "Space planning":                       { app: "Space Management",       product: "TRIRIGA / Envizi"         },
+  "Occupancy management":                 { app: "Space Management",       product: "TRIRIGA / Envizi"         },
+  "Space utilization":                    { app: "Space Management",       product: "TRIRIGA / Envizi"         },
+  "Facilities space optimization":        { app: "Space Management",       product: "TRIRIGA / Envizi"         },
+  "ESG data management":                  { app: "Space Management",       product: "TRIRIGA / Envizi"         },
+  "Emissions tracking & reporting":       { app: "Space Management",       product: "TRIRIGA / Envizi"         },
+  "ESG reporting":                        { app: "Space Management",       product: "TRIRIGA / Envizi"         },
+  "Decarbonization":                      { app: "Space Management",       product: "TRIRIGA / Envizi"         },
+  "ESG planning & forecasting":           { app: "Space Management",       product: "TRIRIGA / Envizi"         }
+};
+
+// Partner eligibility: rebuilt at runtime from "Partner Why Match" sheet — starts empty.
+var PARTNER_ELIGIBILITY = {};
+
+
+// Flat goal → Industry node map (replaces the old Application→Goal→Industry tree)
+var GOAL_INDUSTRY_MAP = {
+  "Enterprise asset management": {
+    id: "q-eam-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Utilities / Energy",    node: {id:"p-c-eam-u",   type:"partner", partnerKey:"Cohesive Solutions"  }},
+      {label: "Oil & Gas / Aerospace", node: {id:"p-sms-eam-o", type:"partner", partnerKey:"SMS"                 }},
+      {label: "Manufacturing",         node: {id:"p-mv-eam-m",  type:"partner", partnerKey:"Maven Asset Mgmt"    }},
+      {label: "Govt / Public Sector",  node: {id:"p-sb-eam-g",  type:"partner", partnerKey:"Starboard Consulting"}}
+    ]
+  },
+  "Reliability-centered maintenance": {
+    id: "q-rcm-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Mining / Infrastructure", node: {id:"p-cs-rcm-m", type:"partner", partnerKey:"CoSol"             }},
+      {label: "Utilities / General",     node: {id:"p-co-rcm-u", type:"partner", partnerKey:"Cohesive Solutions"}}
+    ]
+  },
+  "Asset performance management": {
+    id: "q-apm-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Utilities / Transportation", node: {id:"p-zp-apm-u",  type:"partner", partnerKey:"ZPro Solutions"}},
+      {label: "Oil & Gas / Aerospace",      node: {id:"p-sms-apm-o", type:"partner", partnerKey:"SMS"           }}
+    ]
+  },
+  "Field service engagement": {
+    id: "q-fse-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Utilities / Transportation", node: {id:"p-zp-fse-u", type:"partner", partnerKey:"ZPro Solutions"      }},
+      {label: "Govt / Public Sector",       node: {id:"p-sb-fse-g", type:"partner", partnerKey:"Starboard Consulting"}}
+    ]
+  },
+  "Asset inspection": {
+    id: "q-insp-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Govt / Utilities",       node: {id:"p-sb-insp-g",  type:"partner", partnerKey:"Starboard Consulting"}},
+      {label: "Oil & Gas / Industrial", node: {id:"p-sms-insp-o", type:"partner", partnerKey:"SMS"                 }}
+    ]
+  },
+  "Capital & asset investment planning": {
+    id: "q-cap-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Utilities / Energy",     node: {id:"p-co-cap-u", type:"partner", partnerKey:"Cohesive Solutions"}},
+      {label: "Government / Education", node: {id:"p-co-cap-g", type:"partner", partnerKey:"Cohesive Solutions"}}
+    ]
+  },
+  "MRO inventory optimization": {
+    id: "q-mro-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Mining / Infrastructure", node: {id:"p-cs-mro-m", type:"partner", partnerKey:"CoSol"             }},
+      {label: "Utilities / General",     node: {id:"p-co-mro-u", type:"partner", partnerKey:"Cohesive Solutions"}}
+    ]
+  },
+  "Lease administration": {
+    id: "q-ladm-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Real Estate / Finance",  node: {id:"p-jll-ladm-re", type:"partner", partnerKey:"JLL"      }},
+      {label: "Government / Education", node: {id:"p-tr-ladm-g",   type:"partner", partnerKey:"Trescope" }},
+      {label: "Federal / Education",    node: {id:"p-ll-ladm-f",   type:"partner", partnerKey:"llama llc"}}
+    ]
+  },
+  "Lease accounting": {
+    id: "q-lacc-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Real Estate / Finance", node: {id:"p-jll-lacc-re", type:"partner", partnerKey:"JLL"      }},
+      {label: "Government / Federal",  node: {id:"p-ll-lacc-g",   type:"partner", partnerKey:"llama llc"}}
+    ]
+  },
+  "Lease compliance": {
+    id: "q-lcom-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Real Estate / Retail",  node: {id:"p-jll-lcom-re", type:"partner", partnerKey:"JLL"      }},
+      {label: "Government / Federal",  node: {id:"p-ll-lcom-g",   type:"partner", partnerKey:"llama llc"}}
+    ]
+  },
+  "Portfolio lease management": {
+    id: "q-lport-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Real Estate / Finance",  node: {id:"p-jll-lport-re", type:"partner", partnerKey:"JLL"      }},
+      {label: "Government / Education", node: {id:"p-tr-lport-g",   type:"partner", partnerKey:"Trescope" }},
+      {label: "Federal / Education",    node: {id:"p-ll-lport-f",   type:"partner", partnerKey:"llama llc"}}
+    ]
+  },
+  "Space planning": {
+    id: "q-splan-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Real Estate / Healthcare", node: {id:"p-jll-splan-re", type:"partner", partnerKey:"JLL"     }},
+      {label: "Government / Education",   node: {id:"p-tr-splan-g",   type:"partner", partnerKey:"Trescope"}}
+    ]
+  },
+  "Occupancy management": {
+    id: "q-socc-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Real Estate / Finance",   node: {id:"p-jll-socc-re", type:"partner", partnerKey:"JLL"     }},
+      {label: "Government / Healthcare", node: {id:"p-tr-socc-g",   type:"partner", partnerKey:"Trescope"}}
+    ]
+  },
+  "Space utilization": {
+    id: "q-sutil-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Real Estate / Retail",       node: {id:"p-jll-sutil-re", type:"partner", partnerKey:"JLL"     }},
+      {label: "Government / Manufacturing", node: {id:"p-tr-sutil-g",   type:"partner", partnerKey:"Trescope"}}
+    ]
+  },
+  "Facilities space optimization": {
+    id: "q-sfac-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Real Estate / Healthcare", node: {id:"p-jll-sfac-re", type:"partner", partnerKey:"JLL"     }},
+      {label: "Government / Education",   node: {id:"p-tr-sfac-g",   type:"partner", partnerKey:"Trescope"}}
+    ]
+  },
+  "ESG data management": {
+    id: "q-esgd-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Industrial / O&G",   node: {id:"p-sms-esgd-o", type:"partner", partnerKey:"SMS"            }},
+      {label: "Utilities / Energy", node: {id:"p-mv-esgd-u",  type:"partner", partnerKey:"Maven Asset Mgmt"}}
+    ]
+  },
+  "Emissions tracking & reporting": {
+    id: "q-emit-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Industrial / O&G",   node: {id:"p-sms-emit-o", type:"partner", partnerKey:"SMS"            }},
+      {label: "Utilities / Energy", node: {id:"p-mv-emit-u",  type:"partner", partnerKey:"Maven Asset Mgmt"}}
+    ]
+  },
+  "ESG reporting": {
+    id: "q-esgrep-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Real Estate / Finance",      node: {id:"p-jll-esgrep-re", type:"partner", partnerKey:"JLL"}},
+      {label: "Industrial / Manufacturing", node: {id:"p-sms-esgrep-m",  type:"partner", partnerKey:"SMS"}}
+    ]
+  },
+  "Decarbonization": {
+    id: "q-decarb-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Real Estate / Finance",      node: {id:"p-jll-decarb-re", type:"partner", partnerKey:"JLL"}},
+      {label: "Industrial / Manufacturing", node: {id:"p-sms-decarb-m",  type:"partner", partnerKey:"SMS"}}
+    ]
+  },
+  "ESG planning & forecasting": {
+    id: "q-esgplan-ind", type: "q", label: "Select the industry", colLabel: "Industry",
+    children: [
+      {label: "Real Estate / Healthcare", node: {id:"p-jll-esgplan-re", type:"partner", partnerKey:"JLL"            }},
+      {label: "Utilities / Energy",       node: {id:"p-mv-esgplan-u",   type:"partner", partnerKey:"Maven Asset Mgmt"}}
+    ]
+  }
+};
+
+// TREE root: Goal is the first selection. Each child's node is the Industry question.
+// Goals are listed flat — no application groupings — ordered by business area importance.
+var TREE = {
+  id: "root", type: "root", label: "What is the customer goal?",
+  colLabel: "Goal",
+  children: [
+    "Enterprise asset management",
+    "Reliability-centered maintenance",
+    "Asset performance management",
+    "Field service engagement",
+    "Asset inspection",
+    "Capital & asset investment planning",
+    "MRO inventory optimization",
+    "Lease administration",
+    "Lease accounting",
+    "Lease compliance",
+    "Portfolio lease management",
+    "Space planning",
+    "Occupancy management",
+    "Space utilization",
+    "Facilities space optimization",
+    "ESG data management",
+    "Emissions tracking & reporting",
+    "ESG reporting",
+    "Decarbonization",
+    "ESG planning & forecasting"
+  ].map(function(goalLabel) {
+    return { label: goalLabel, node: GOAL_INDUSTRY_MAP[goalLabel] };
+  })
+};
+
+// ═══════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════
+var selections = [];
+var selectedExpPartner = null;  // partner key whose experience column is open
+var activeModalPartner = null;  // partner key whose details modal is open
+
+// ═══════════════════════════════════════════════════
+// SCORING ENGINE  (gated matching model)
+// ═══════════════════════════════════════════════════
+
+// Only Goal and Industry are user selections; Application is always derived.
+var COL_SLOT = { "Goal": "goal", "Industry": "industry" };
+
+// Build context { app, goal, industry, product } from current selections.
+// app and product are always derived from GOAL_META — never from user input.
+function buildContext() {
+  var ctx = { app: null, goal: null, industry: null, product: null };
+  var node = TREE;
+  for (var i = 0; i < selections.length; i++) {
+    var sel  = selections[i];
+    var slot = COL_SLOT[node.colLabel];
+    if (slot) { ctx[slot] = sel.childLabel; }
+    node = sel.childNode;
+  }
+  if (ctx.goal) {
+    var meta = GOAL_META[ctx.goal] || {};
+    ctx.app     = meta.app     || null;
+    ctx.product = meta.product || null;
+  }
+  return ctx;
+}
+
+// ── Step 1: Eligible pool ──
+// Derive app from GOAL_META and look up PARTNER_ELIGIBILITY["App::Goal"].
+function getEligiblePartners() {
+  var ctx = buildContext();
+  if (ctx.app && ctx.goal) {
+    var list = PARTNER_ELIGIBILITY[ctx.app + "::" + ctx.goal];
+    if (list) { return list.slice(); }
+  }
+  // Fallback: collect from the Industry node's children
+  var pool = [], seen = {}, node = TREE;
+  for (var i = 0; i < selections.length; i++) {
+    if (node.colLabel === "Industry" && node.children) {
+      node.children.forEach(function(child) {
+        if (child.node.type === "partner") {
+          var k = child.node.partnerKey;
+          if (k && !seen[k]) { seen[k] = true; pool.push(k); }
+        }
+      });
+      break;
+    }
+    node = selections[i].childNode;
+  }
+  return pool;
+}
+
+// ── Step 2: Scoring formula (max 100 pts) ──
+var TIER_POINTS = { "Platinum": 10, "Gold": 8, "Silver": 5, "Specialist": 3, "Partner": 2 };
+
+var GOAL_CAP_KEYWORDS = {
+  "enterprise asset management":          ["implementations","asset","eam"],
+  "reliability-centered maintenance":     ["reliability","asset management"],
+  "asset performance management":         ["apm","analytics","ai/ml","asset performance"],
+  "field service engagement":             ["mobile","field service","managed services"],
+  "capital & asset investment planning":  ["scheduler","asset health","implementations"],
+  "asset inspection":                     ["gis","mobile","inspection"],
+  "mro inventory optimization":           ["mro optimization","reliability"],
+  "lease administration":                 ["lease administration","lease"],
+  "lease accounting":                     ["lease accounting","lease"],
+  "lease compliance":                     ["lease compliance","lease"],
+  "portfolio lease management":           ["portfolio lease management","lease"],
+  "space planning":                       ["space planning","space management"],
+  "occupancy management":                 ["occupancy management","space management"],
+  "space utilization":                    ["space utilization","space management"],
+  "facilities space optimization":        ["facilities space optimization","space management"],
+  "esg data management":                  ["esg data","sustainability"],
+  "emissions tracking & reporting":       ["esg reporting","emissions tracking"],
+  "esg reporting":                        ["esg reporting","carbon reporting"],
+  "decarbonization":                      ["decarbonization","sustainability","carbon reporting"],
+  "esg planning & forecasting":           ["esg planning","sustainability"]
+};
+
+// Industry tokens match: "Utilities / Energy" → ["utilities","energy"]
+function industryTokens(label) {
+  if (!label) { return []; }
+  return label.toLowerCase().split(/[\s\/,&]+/).filter(function(t) { return t.length > 2; });
+}
+
+function scoreIndustry(industryLabel, partnerIndustries) {
+  // 40 pts max — scale by proportion of tokens matched
+  if (!industryLabel || !partnerIndustries || !partnerIndustries.length) { return 0; }
+  var tokens = industryTokens(industryLabel);
+  if (!tokens.length) { return 0; }
+  var hits = 0;
+  partnerIndustries.forEach(function(ind) {
+    var il = ind.toLowerCase();
+    tokens.forEach(function(t) {
+      if (il.indexOf(t) !== -1 || t.indexOf(il) !== -1) { hits++; }
+    });
+  });
+  // Full match (all tokens hit) = 40, partial scaled proportionally
+  return Math.round(Math.min(hits / tokens.length, 1) * 40);
+}
+
+function scoreGoal(goalLabel, partnerCaps) {
+  // 30 pts max
+  if (!goalLabel || !partnerCaps || !partnerCaps.length) { return 0; }
+  var keywords = GOAL_CAP_KEYWORDS[goalLabel.toLowerCase()] || [];
+  if (!keywords.length) { return 0; }
+  var caps = partnerCaps.map(function(c) { return c.toLowerCase(); });
+  var hits = 0;
+  keywords.forEach(function(kw) {
+    caps.forEach(function(cap) {
+      if (cap.indexOf(kw) !== -1 || kw.indexOf(cap) !== -1) { hits++; }
+    });
+  });
+  return Math.round(Math.min(hits / keywords.length, 1) * 30);
+}
+
+function scoreCapabilities(goalLabel, partnerCaps) {
+  // 15 pts max — breadth of matching capabilities
+  if (!goalLabel || !partnerCaps || !partnerCaps.length) { return 0; }
+  var keywords = GOAL_CAP_KEYWORDS[goalLabel.toLowerCase()] || [];
+  var caps = partnerCaps.map(function(c) { return c.toLowerCase(); });
+  var hits = 0;
+  keywords.forEach(function(kw) {
+    caps.forEach(function(cap) {
+      if (cap.indexOf(kw) !== -1 || kw.indexOf(cap) !== -1) { hits++; }
+    });
+  });
+  // More capability hits = closer to 15
+  return Math.round(Math.min(hits / Math.max(keywords.length, 1), 1) * 15);
+}
+
+function scoreCertifications(partnerCerts) {
+  // 5 pts max — having IBM certs earns points
+  if (!partnerCerts || !partnerCerts.length) { return 0; }
+  var pts = 0;
+  partnerCerts.forEach(function(c) {
+    var cl = c.toLowerCase();
+    if (cl.indexOf("platinum") !== -1) { pts += 5; }
+    else if (cl.indexOf("gold") !== -1)  { pts += 4; }
+    else if (cl.indexOf("certified") !== -1 || cl.indexOf("specialist") !== -1) { pts += 3; }
+    else { pts += 2; }
+  });
+  return Math.min(pts, 5);
+}
+
+function scorePartner(partnerKey, ctx) {
+  var pd = PARTNERS[partnerKey];
+  if (!pd) { return { total: 0, breakdown: {} }; }
+
+  var ind  = scoreIndustry(ctx.industry, pd.industries);
+  var goal = scoreGoal(ctx.goal, pd.capabilities);
+  var cap  = scoreCapabilities(ctx.goal, pd.capabilities);
+  var tier = TIER_POINTS[pd.tier] || 2;
+  var cert = scoreCertifications(pd.certifications);
+  var total = ind + goal + cap + tier + cert;
+
+  return {
+    total: total,
+    breakdown: { industry: ind, goal: goal, capabilities: cap, tier: tier, certifications: cert }
+  };
+}
+
+// ── Step 3: Partner Highlights — differentiators only ──
+// Priority: 1) matched capabilities  2) partner strengths  3) focus area
+// Always returns at least 3 bullets.
+function buildWhyBullets(partnerKey, ctx) {
+  var pd      = PARTNERS[partnerKey];
+  var bullets = [];
+  var seen    = {};
+
+  function add(text) {
+    if (!seen[text]) { seen[text] = true; bullets.push(text); }
+  }
+
+  // 1. Capabilities that match the selected goal's keywords
+  var keywords = GOAL_CAP_KEYWORDS[(ctx.goal || "").toLowerCase()] || [];
+  (pd.capabilities || []).forEach(function(c) {
+    var cl = c.toLowerCase();
+    if (keywords.some(function(kw) { return cl.indexOf(kw) !== -1 || kw.indexOf(cl) !== -1; })) {
+      add(c);
+    }
+  });
+
+  // 2. Partner strengths (fill gap if capability match was thin)
+  (pd.strengths || []).forEach(function(s) { add(s); });
+
+  // 3. Focus area as a final fallback bullet
+  if (pd.focus) { add(pd.focus); }
+
+  // 4. Unique product certifications (strip IBM tier certs)
+  var IBM_TIER_PATTERN = /platinum|gold|silver|^ibm partner$/i;
+  (pd.certifications || []).forEach(function(cert) {
+    if (!IBM_TIER_PATTERN.test(cert)) { add(cert); }
+  });
+
+  // Return up to 4 bullets; always at least the first 3 available
+  return bullets.slice(0, 4);
+}
+
+// ═══════════════════════════════════════════════════
+// RENDER FLOW  — journey-builder edition
+// ═══════════════════════════════════════════════════
+
+// Arrow connector between nodes
+function connector(fc) {
+  var conn = document.createElement("div");
+  conn.className = "jconnector";
+  conn.innerHTML = '<svg width="36" height="30" viewBox="0 0 36 30">' +
+    '<path d="M 0 15 L 28 15" stroke="#93c5fd" stroke-width="1.5" fill="none" stroke-dasharray="4 3"/>' +
+    '<path d="M 26 11 L 34 15 L 26 19" stroke="#93c5fd" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>' +
+    '</svg>';
+  fc.appendChild(conn);
+}
+
+// Green connector aligned to a specific partner card
+function expConnector(fc, cardIdx) {
+  var conn = document.createElement("div");
+  conn.className = "jconnector exp-conn-" + cardIdx;
+  conn.innerHTML = '<svg width="36" height="30" viewBox="0 0 36 30">' +
+    '<path d="M 0 15 L 28 15" stroke="#6ee7b7" stroke-width="1.5" fill="none" stroke-dasharray="4 3"/>' +
+    '<path d="M 26 11 L 34 15 L 26 19" stroke="#6ee7b7" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>' +
+    '</svg>';
+  fc.appendChild(conn);
+}
+
+function renderFlow() {
+  var fc = document.getElementById("flow-columns");
+  fc.innerHTML = "";
+
+  // Step 1 is always the Goal node
+  var isGoalDone = selections.length >= 1;
+  renderGoalNode(fc, isGoalDone, 1);
+
+  if (selections.length === 0) {
+    updateSelectionBar();
+    return;
+  }
+
+  // Step 2: Industry node
+  var sel0 = selections[0];
+  var industryNode = sel0.childNode;  // the Industry question node
+  connector(fc);
+
+  var isIndustryDone = selections.length >= 2;
+  renderDecisionNode(fc, industryNode, 0, isIndustryDone, 2);
+
+  if (selections.length < 2) {
+    updateSelectionBar();
+    return;
+  }
+
+  // Steps 3+: partner leaf → Match Summary + Partner Results + optional Exp
+  var sel1 = selections[1];
+  var leaf  = sel1.childNode;
+
+  if (leaf.type === "partner") {
+    connector(fc);
+    renderMatchSummary(fc, selections.length);
+    connector(fc);
+    renderPartnerResults(fc, selections.length + 1);
+    if (selectedExpPartner) {
+      var _ctx  = buildContext();
+      var _pool = getEligiblePartners();
+      var _ranked = _pool.map(function(pk) {
+        return { pKey: pk, total: scorePartner(pk, _ctx).total };
+      });
+      _ranked.sort(function(a, b) { return b.total - a.total; });
+      var _top2Keys = _ranked.slice(0, 2).map(function(r) { return r.pKey; });
+      var expCardIdx = _top2Keys.indexOf(selectedExpPartner);
+      var expIdx = expCardIdx < 0 ? 0 : expCardIdx;
+      expConnector(fc, expIdx);
+      renderRelevantExperience(fc, selections.length + 2, expIdx);
+    }
+  }
+
+  updateSelectionBar();
+}
+
+// Render the Goal journey node
+function renderGoalNode(container, isDone, stepNum) {
+  var selGoal = selections.length >= 1 ? selections[0].childLabel : null;
+  var sortedGoals = TREE.children.slice().sort(function(a, b) {
+    return a.label.localeCompare(b.label);
+  });
+
+  var node = document.createElement("div");
+  node.className = "jnode jnode-wide" + (isDone ? " is-done" : " is-active");
+
+  var card = document.createElement("div");
+  card.className = "jcard";
+
+  // Header
+  var hdr = document.createElement("div");
+  hdr.className = "jnode-header";
+  hdr.innerHTML =
+    '<span class="jnode-step">Step ' + stepNum + ' &nbsp; Goal</span>' +
+    '<span class="jnode-step-badge">' + (isDone ? "✓" : stepNum) + '</span>';
+  card.appendChild(hdr);
+
+  if (isDone) {
+    // Completed state: show selected value as a pill
+    var dv = document.createElement("div");
+    dv.className = "jnode-done-value";
+    dv.innerHTML = '<span class="dv-check">✓</span>' + selGoal;
+    dv.title = "Click to change goal";
+    dv.addEventListener("click", function() {
+      selections = [];
+      selectedExpPartner = null;
+      activeModalPartner = null;
+      closeModal();
+      renderFlow();
+    });
+    card.appendChild(dv);
+
+    var hint = document.createElement("div");
+    hint.className = "jnode-done-hint";
+    hint.textContent = "Click to change";
+    card.appendChild(hint);
+  } else {
+    // Active state: search + scrollable goal list
+    var q = document.createElement("div");
+    q.className = "jnode-question";
+    q.textContent = "What is the customer's goal?";
+    card.appendChild(q);
+
+    var srchWrap = document.createElement("div");
+    srchWrap.className = "jnode-search";
+    srchWrap.innerHTML = '<span class="jnode-search-icon">⌕</span>';
+    var srchInput = document.createElement("input");
+    srchInput.type = "text";
+    srchInput.placeholder = "Filter goals…";
+    srchInput.setAttribute("autocomplete", "off");
+    srchWrap.appendChild(srchInput);
+    card.appendChild(srchWrap);
+
+    var optList = document.createElement("div");
+    optList.className = "jnode-options";
+
+    function renderGoalOptions(filter) {
+      optList.innerHTML = "";
+      sortedGoals.forEach(function(child) {
+        if (filter && child.label.toLowerCase().indexOf(filter.toLowerCase()) === -1) { return; }
+        var opt = document.createElement("div");
+        opt.className = "jopt";
+        opt.textContent = child.label;
+        opt.addEventListener("click", (function(c) {
+          return function() { onSelect(0, c); };
+        })(child));
+        optList.appendChild(opt);
+      });
+    }
+    renderGoalOptions("");
+    srchInput.addEventListener("input", function() { renderGoalOptions(this.value); });
+    card.appendChild(optList);
+  }
+
+  node.appendChild(card);
+  container.appendChild(node);
+}
+
+// Render a decision node (Industry or future steps)
+function renderDecisionNode(container, node, depth, isDone, stepNum) {
+  var selChild = null;
+  var rest = [];
+  node.children.forEach(function(child) {
+    var isSel = (selections[depth + 1] &&
+                 selections[depth + 1].childLabel === child.label &&
+                 selections[depth + 1].childNode  === child.node);
+    if (isSel) { selChild = child; } else { rest.push(child); }
+  });
+
+  var jnode = document.createElement("div");
+  jnode.className = "jnode" + (isDone ? " is-done" : " is-active");
+
+  var card = document.createElement("div");
+  card.className = "jcard";
+
+  var hdr = document.createElement("div");
+  hdr.className = "jnode-header";
+  hdr.innerHTML =
+    '<span class="jnode-step">Step ' + stepNum + ' &nbsp; ' + (node.colLabel || "Select") + '</span>' +
+    '<span class="jnode-step-badge">' + (isDone ? "✓" : stepNum) + '</span>';
+  card.appendChild(hdr);
+
+  if (isDone && selChild) {
+    // Completed: show pill + allow re-selection by rewinding
+    var dv = document.createElement("div");
+    dv.className = "jnode-done-value";
+    dv.innerHTML = '<span class="dv-check">✓</span>' + selChild.label;
+    dv.title = "Click to change";
+    dv.addEventListener("click", (function(d) {
+      return function() {
+        selections = selections.slice(0, d + 1);
+        selectedExpPartner = null;
+        renderFlow();
+      };
+    })(depth));
+    card.appendChild(dv);
+
+    var hint = document.createElement("div");
+    hint.className = "jnode-done-hint";
+    hint.textContent = "Click to change";
+    card.appendChild(hint);
+  } else {
+    var q = document.createElement("div");
+    q.className = "jnode-question";
+    q.textContent = node.label;
+    card.appendChild(q);
+
+    var optList = document.createElement("div");
+    optList.className = "jnode-options";
+    node.children.forEach(function(child) {
+      var opt = document.createElement("div");
+      opt.className = "jopt" + (child === selChild ? " jopt-selected" : "");
+      if (child === selChild) {
+        opt.innerHTML = '<span class="jopt-check">✓</span>' + child.label;
+      } else {
+        opt.textContent = child.label;
+      }
+      opt.addEventListener("click", (function(d, c) {
+        return function() { onSelect(d, c); };
+      })(depth + 1, child));
+      optList.appendChild(opt);
+    });
+    card.appendChild(optList);
+  }
+
+  jnode.appendChild(card);
+  container.appendChild(jnode);
+}
+
+// ── Match Summary column ──
+// Appears after Industry selection; shows derived IBM Application + Product.
+function renderMatchSummary(container, colIndex) {
+  var ctx = buildContext();
+
+  var col = document.createElement("div");
+  col.className = "flow-col summary-col";
+  col.dataset.depth = colIndex;
+
+  var lbl = document.createElement("div");
+  lbl.className = "col-label";
+  lbl.textContent = "Match Summary";
+  col.appendChild(lbl);
+
+  function summaryRow(label, value, isBadge) {
+    var row = document.createElement("div");
+    row.className = "summary-row";
+    row.innerHTML = '<div class="summary-row-label">' + label + '</div>' +
+      (isBadge
+        ? '<div><span class="summary-ibm-badge">' + value + '</span></div>'
+        : '<div class="summary-row-value">' + value + '</div>');
+    return row;
+  }
+
+  var card = document.createElement("div");
+  card.className = "summary-card";
+  card.appendChild(summaryRow("Customer Goal",           ctx.goal     || "—", false));
+  card.appendChild(summaryRow("Industry",                ctx.industry || "—", false));
+  card.appendChild(summaryRow("IBM Application",         ctx.app      || "—", true));
+  card.appendChild(summaryRow("IBM Product",             ctx.product  || "—", true));
+  col.appendChild(card);
+
+  container.appendChild(col);
+}
+
+// ── Synthetic partner results column ──
+// Gated: only scores partners eligible for the selected Industry path.
+// Always shows exactly the top 2 partners — no scores, no View All.
+function renderPartnerResults(container, colIndex) {
+  var ctx  = buildContext();
+  var pool = getEligiblePartners();   // gated partner keys for this path
+
+  // Score the eligible pool, sort descending, take top 2
+  var ranked = pool.map(function(pKey) {
+    var result = scorePartner(pKey, ctx);
+    return { pKey: pKey, total: result.total };
+  });
+  ranked.sort(function(a, b) { return b.total - a.total; });
+  var top2 = ranked.slice(0, 2);
+
+  // Build column — headings reflect the actual number of cards being rendered
+  var col = document.createElement("div");
+  col.className = "flow-col partner-col";
+  col.dataset.depth = colIndex;
+
+  var lbl = document.createElement("div");
+  lbl.className = "col-label";
+  lbl.textContent = top2.length === 1 ? "Recommended Partner" : "Recommended Partners";
+  col.appendChild(lbl);
+
+  if (top2.length >= 2) {
+    var qh = document.createElement("div");
+    qh.className = "q-heading";
+    qh.textContent = "Two partners most relevant to this scenario";
+    col.appendChild(qh);
+  }
+
+  top2.forEach(function(item, idx) {
+    var pKey    = item.pKey;
+    var pd      = PARTNERS[pKey];
+    var bullets = buildWhyBullets(pKey, ctx);
+    var isExpSelected = (selectedExpPartner === pKey);
+
+    var badge = (idx === 0)
+      ? '<span class="rank-badge rank-best">Recommended Partner</span>'
+      : '<span class="rank-badge rank-alt">Additional Option</span>';
+
+    var chips = bullets.slice(0, 3);
+    var highlightsHtml = chips.length
+      ? '<div class="p-why-title">Highlights</div>' +
+        '<div class="p-chip-wrap">' +
+        chips.map(function(b) { return '<span class="p-chip">' + b + '</span>'; }).join("") +
+        '</div>'
+      : '';
+
+    var card = document.createElement("div");
+    card.className = "p-card" + (isExpSelected ? " p-exp-active" : "");
+    card.innerHTML =
+      badge +
+      '<div class="p-name-row">' +
+        '<span class="p-name">' + pKey + '</span>' +
+        ' <span class="tier ' + (pd.tierClass || "") + '">' + (pd.tier || "") + '</span>' +
+      '</div>' +
+      highlightsHtml +
+      '<div class="p-card-actions">' +
+        '<div class="p-btn p-btn-primary">View Details</div>' +
+        '<div class="p-btn-divider"></div>' +
+        '<div class="p-btn p-btn-secondary' + (isExpSelected ? ' p-btn-active' : '') + '">' +
+          (isExpSelected ? 'Hide Customer References' : 'Customer References') +
+        '</div>' +
+      '</div>';
+
+    // Primary button → modal; secondary button → toggle experience column
+    card.addEventListener("click", (function(k) {
+      return function(e) {
+        var btn = e.target.closest ? e.target.closest(".p-btn") : (e.target.classList.contains("p-btn") ? e.target : null);
+        if (btn && btn.classList.contains("p-btn-secondary")) {
+          selectedExpPartner = (selectedExpPartner === k) ? null : k;
+          renderFlow();
+          setTimeout(function() {
+            var fa = document.getElementById("flow-area");
+            fa.scrollTo({ left: fa.scrollWidth, behavior: "smooth" });
+          }, 50);
+        } else if (btn && btn.classList.contains("p-btn-primary")) {
+          openModal(k);
+        }
+      };
+    })(pKey));
+    col.appendChild(card);
+  });
+
+  container.appendChild(col);
+}
+
+// ── Relevant Experience column ──
+// Shows industry-matched references for selectedExpPartner only.
+// cardIdx (0 or 1) offsets the column vertically to align with the active partner card.
+function renderRelevantExperience(container, colIndex, cardIdx) {
+  var ctx  = buildContext();
+  var pKey = selectedExpPartner;
+  var pd   = PARTNERS[pKey];
+  if (!pd) { return; }
+
+  // Substring-match industry label against winStoriesByIndustry keys
+  function pickStories() {
+    var wins = pd.winStoriesByIndustry || {};
+    var industry = ctx.industry || "";
+    var keys = Object.keys(wins).filter(function(k) { return k !== "_fallback"; });
+    var matched = null;
+    keys.forEach(function(k) {
+      var kl = k.toLowerCase();
+      var il = industry.toLowerCase();
+      if (!matched && (il.indexOf(kl) !== -1 || kl.indexOf(il) !== -1)) { matched = k; }
+    });
+    return (matched ? wins[matched] : (wins["_fallback"] || [])).slice(0, 5);
+  }
+
+  var refs = pickStories();
+
+  var col = document.createElement("div");
+  col.className = "flow-col exp-col exp-col-" + (cardIdx || 0);
+  col.dataset.depth = colIndex;
+
+  var lbl = document.createElement("div");
+  lbl.className = "col-label";
+  lbl.textContent = "Relevant Experience";
+  col.appendChild(lbl);
+
+  var card = document.createElement("div");
+  card.className = "exp-card";
+
+  // Partner label
+  var partnerLabel = document.createElement("div");
+  partnerLabel.className = "exp-section-label";
+  partnerLabel.textContent = "Partner";
+  card.appendChild(partnerLabel);
+
+  var partnerName = document.createElement("div");
+  partnerName.className = "exp-partner-name";
+  partnerName.textContent = pKey;
+  card.appendChild(partnerName);
+
+  // Similar customers
+  var custLabel = document.createElement("div");
+  custLabel.className = "exp-section-label";
+  custLabel.style.marginTop = "14px";
+  custLabel.textContent = "Similar Customers";
+  card.appendChild(custLabel);
+
+  if (refs.length) {
+    var ul = document.createElement("ul");
+    ul.className = "exp-list";
+    refs.forEach(function(r) {
+      var li = document.createElement("li");
+      li.textContent = r;
+      ul.appendChild(li);
+    });
+    card.appendChild(ul);
+  } else {
+    var msg = document.createElement("div");
+    msg.className = "exp-no-match";
+    msg.textContent = "No specific references available for this industry.";
+    card.appendChild(msg);
+  }
+
+  col.appendChild(card);
+  container.appendChild(col);
+}
+
+function onSelect(depth, child) {
+  // Trim selections to this depth, then push new selection
+  selections = selections.slice(0, depth);
+  selections[depth] = { childLabel: child.label, childNode: child.node };
+
+  // Any goal or industry change invalidates the current partner pool.
+  // Clear partner state so the bar and exp panel never show stale data.
+  if (depth <= 1) {
+    selectedExpPartner = null;
+    activeModalPartner = null;
+    closeModal();
+  } else if (selectedExpPartner) {
+    // Also clear if the selected partner is no longer in the eligible pool
+    // (edge case: same industry selected but pool differs)
+    var _ctx2 = buildContext();
+    var _pool2 = getEligiblePartners();
+    if (_pool2.indexOf(selectedExpPartner) === -1) {
+      selectedExpPartner = null;
+    }
+  }
+
+  renderFlow();
+  // Auto-scroll right to reveal the next column
+  setTimeout(function() {
+    var fa = document.getElementById("flow-area");
+    fa.scrollTo({ left: fa.scrollWidth, behavior: "smooth" });
+  }, 50);
+}
+
+function resetFlow() {
+  selections = [];
+  selectedExpPartner = null;
+  activeModalPartner = null;
+  closeModal();
+  renderFlow();
+  // Scroll back to the start
+  setTimeout(function() {
+    var fa = document.getElementById("flow-area");
+    fa.scrollTo({ left: 0, behavior: "smooth" });
+  }, 50);
+}
+
+// ═══════════════════════════════════════════════════
+// CURRENT SELECTION BAR
+// ═══════════════════════════════════════════════════
+// Reflects the full active workflow state as a pill chain:
+//   Goal  ›  Industry  ›  Partner  ›  [Partner Details | Customer References]
+function updateSelectionBar() {
+  var bar = document.getElementById("selection-bar");
+  if (!bar) { return; }
+
+  if (selections.length === 0) {
+    bar.innerHTML = '<span class="sel-empty">Select a goal to begin</span>';
+    return;
+  }
+
+  var pills = [];  // { label, depth, action }
+
+  // Goal (depth 0) and Industry (depth 1) from selections array
+  for (var i = 0; i < Math.min(selections.length, 2); i++) {
+    pills.push({ label: selections[i].childLabel, depth: i, action: "rewind" });
+  }
+
+  // Partner pill — from whichever partner is currently active
+  // (modal takes priority display label; exp references also show partner)
+  var partnerKey = activeModalPartner || selectedExpPartner;
+  if (partnerKey && selections.length >= 2) {
+    pills.push({ label: partnerKey, depth: "partner", action: "none" });
+
+    // Sub-action pill
+    if (activeModalPartner) {
+      pills.push({ label: "Partner Details", depth: "modal", action: "close-modal" });
+    } else if (selectedExpPartner) {
+      pills.push({ label: "Customer References", depth: "exp", action: "close-exp" });
+    }
+  }
+
+  var html = '<span class="sel-label">Current Selection</span>';
+  pills.forEach(function(p, idx) {
+    if (idx > 0) { html += '<span class="sel-pill-sep">›</span>'; }
+    html += '<span class="sel-pill" data-depth="' + p.depth + '" data-action="' + p.action + '">' +
+              p.label +
+            '</span>';
+  });
+
+  bar.innerHTML = html;
+
+  bar.querySelectorAll(".sel-pill").forEach(function(pill) {
+    pill.addEventListener("click", function() {
+      var action = this.dataset.action;
+      var depth  = this.dataset.depth;
+      if (action === "rewind") {
+        var d = parseInt(depth);
+        selections = selections.slice(0, d + 1);
+        selectedExpPartner = null;
+        activeModalPartner = null;
+        closeModal();
+        renderFlow();
+      } else if (action === "close-modal") {
+        closeModal();
+      } else if (action === "close-exp") {
+        selectedExpPartner = null;
+        renderFlow();
+      }
+      // "none" (partner pill) — no action, just display
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════════
+// MODAL
+// ═══════════════════════════════════════════════════
+function openModal(partnerKey) {
+  var pd = PARTNERS[partnerKey];
+  if (!pd) { return; }
+
+  activeModalPartner = partnerKey;
+  updateSelectionBar();
+
+  document.getElementById("m-name").textContent  = partnerKey;
+  document.getElementById("m-focus").textContent = pd.focus || "";
+
+  var body = document.getElementById("modal-body");
+  body.innerHTML = "";
+
+  function section(title, content) {
+    var s = document.createElement("div");
+    s.className = "modal-section";
+    s.innerHTML = '<div class="modal-section-title">' + title + '</div>' + content;
+    body.appendChild(s);
+  }
+
+  // Tier
+  section("IBM Tier",
+    '<div class="modal-tags"><span class="modal-tag"><span class="tier ' + pd.tierClass + '">' + pd.tier + '</span></span></div>');
+
+  // Products
+  if (pd.products && pd.products.length) {
+    section("IBM Products", '<div class="modal-tags">' +
+      pd.products.map(function(p) { return '<span class="modal-tag">' + p + '</span>'; }).join("") +
+      '</div>');
+  }
+
+  // Industries
+  if (pd.industries && pd.industries.length) {
+    section("Industries", '<div class="modal-tags">' +
+      pd.industries.map(function(i) { return '<span class="modal-tag">' + i + '</span>'; }).join("") +
+      '</div>');
+  }
+
+  // Capabilities / Offerings
+  if (pd.capabilities && pd.capabilities.length) {
+    section("Key Offerings", '<div class="modal-tags">' +
+      pd.capabilities.map(function(c) { return '<span class="modal-tag">' + c + '</span>'; }).join("") +
+      '</div>');
+  }
+
+  // Strengths
+  if (pd.strengths && pd.strengths.length) {
+    section("Key Strengths", '<ul style="padding-left:16px;font-size:13px;color:#374151;line-height:1.8;">' +
+      pd.strengths.map(function(s) { return '<li>' + s + '</li>'; }).join("") + '</ul>');
+  }
+
+  // Certifications
+  if (pd.certifications && pd.certifications.length) {
+    section("Certifications", '<div class="modal-tags">' +
+      pd.certifications.map(function(c) { return '<span class="modal-tag">' + c + '</span>'; }).join("") +
+      '</div>');
+  }
+
+  // Geography
+  if (pd.geography) {
+    section("Geographic Coverage", '<p>' + pd.geography + '</p>');
+  }
+
+  // Notes
+  if (pd.notes) {
+    section("Notes", '<p>' + pd.notes + '</p>');
+  }
+
+  // Contact
+  if (pd.contact) {
+    var c = pd.contact;
+    section("Contact",
+      '<div class="modal-contact">' +
+      '<div class="mc-name">'  + c.name  + '</div>' +
+      '<div class="mc-role">'  + c.role  + '</div>' +
+      '<a class="mc-email" href="mailto:' + c.email + '">' + c.email + '</a>' +
+      '</div>');
+  }
+
+  document.getElementById("modal-overlay").classList.add("open");
+}
+
+function closeModal() {
+  document.getElementById("modal-overlay").classList.remove("open");
+  activeModalPartner = null;
+  updateSelectionBar();
+}
+
+document.getElementById("modal-close-btn").addEventListener("click", closeModal);
+document.getElementById("modal-overlay").addEventListener("click", function(e) {
+  if (e.target === this) { closeModal(); }
+});
+document.addEventListener("keydown", function(e) {
+  if (e.key === "Escape") { closeModal(); }
+});
+
+// ═══════════════════════════════════════════════════
+// SEARCH
+// ═══════════════════════════════════════════════════
+var searchEl  = document.getElementById("partner-search");
+var resultsEl = document.getElementById("search-results");
+
+searchEl.addEventListener("input", function() {
+  var q = this.value.trim().toLowerCase();
+  resultsEl.innerHTML = "";
+  if (!q) { resultsEl.style.display = "none"; return; }
+
+  var matches = Object.keys(PARTNERS).filter(function(k) {
+    var pd = PARTNERS[k];
+    return k.toLowerCase().includes(q) ||
+      (pd.focus || "").toLowerCase().includes(q) ||
+      (pd.industries || []).join(" ").toLowerCase().includes(q) ||
+      (pd.capabilities || []).join(" ").toLowerCase().includes(q);
+  });
+
+  if (!matches.length) { resultsEl.style.display = "none"; return; }
+
+  matches.forEach(function(k) {
+    var pd   = PARTNERS[k];
+    var item = document.createElement("div");
+    item.className = "sr-item";
+    item.innerHTML =
+      '<div class="sr-name">' + k +
+      ' <span class="tier ' + pd.tierClass + '">' + pd.tier + '</span></div>' +
+      '<div class="sr-meta">' + (pd.industries || []).slice(0,3).join(", ") + '</div>';
+    item.addEventListener("click", function() {
+      openModal(k);
+      searchEl.value = "";
+      resultsEl.style.display = "none";
+    });
+    resultsEl.appendChild(item);
+  });
+
+  resultsEl.style.display = "block";
+});
+
+document.addEventListener("click", function(e) {
+  if (!searchEl.contains(e.target) && !resultsEl.contains(e.target)) {
+    resultsEl.style.display = "none";
+  }
+});
+
+// ═══════════════════════════════════════════════════
+// SPREADSHEET LOADER  — auto-fetch Maximo BP Master.xlsx
+// ═══════════════════════════════════════════════════
+
+function tierClassFromTier(tier) {
+  var t = (tier || "").toLowerCase();
+  if (t === "platinum")   return "t-p";
+  if (t === "gold")       return "t-g";
+  if (t === "silver")     return "t-s";
+  if (t === "specialist") return "t-sp";
+  return "t-u";
+}
+
+function splitCell(val) {
+  if (!val) return [];
+  return String(val).split(/[|;]/).map(function(s){ return s.trim(); }).filter(Boolean);
+}
+
+// Build PARTNERS from "Partner Master" sheet rows
+function buildPartners(rows) {
+  var out = {};
+  rows.forEach(function(r) {
+    var name = (r['Partner'] || '').trim();
+    if (!name) return;
+    var tier = (r['Level'] || '').trim();
+    // Win Stories column: semicolon-delimited list of story titles → _fallback array
+    var winRaw = (r['Win Stories / Use-case Links'] || '').trim();
+    var winList = splitCell(winRaw);
+    out[name] = {
+      tier:         tier,
+      tierClass:    tierClassFromTier(tier),
+      focus:        (r['Primary Focus'] || '').trim(),
+      products:     splitCell(r['IBM Products']),
+      industries:   splitCell(r['Best Industries']),
+      capabilities: splitCell(r['Key Capabilities']),
+      strengths:    [],          // populated below from Why Match sheet
+      certifications: [tier ? 'IBM ' + tier + ' Partner' : ''].filter(Boolean),
+      geography:    '',
+      notes:        (r['Ideal Use Case'] || '').trim(),
+      contact: {
+        name:  (r['Main Contact'] || '').trim(),
+        role:  'Partner Lead',
+        email: (r['Email'] || '').trim()
+      },
+      winStoriesByIndustry: { '_fallback': winList }
+    };
+  });
+  return out;
+}
+
+// Build PARTNER_ELIGIBILITY + per-partner strengths from "Partner Why Match" sheet rows
+function buildEligibilityAndStrengths(rows, partners) {
+  var elig = {};
+  rows.forEach(function(r) {
+    var name = (r['Business Partner'] || '').trim();
+    var app  = (r['Application']      || '').trim();
+    var goal = (r['Goal']             || '').trim();
+    var why  = (r['Why Match']        || '').trim();
+    var inds = splitCell(r['Industries'] || '');
+    if (!name || !app || !goal) return;
+
+    var key = app + '::' + goal;
+    if (!elig[key]) elig[key] = [];
+    if (elig[key].indexOf(name) === -1) elig[key].push(name);
+
+    // Enrich partner strengths from Why Match text
+    if (partners[name] && why && partners[name].strengths.indexOf(why) === -1) {
+      partners[name].strengths.push(why);
+    }
+
+    // Enrich winStoriesByIndustry keyed by industry from the Why Match sheet
+    if (partners[name] && inds.length) {
+      inds.forEach(function(ind) {
+        if (!partners[name].winStoriesByIndustry[ind]) {
+          partners[name].winStoriesByIndustry[ind] =
+            partners[name].winStoriesByIndustry['_fallback'].slice(0, 4);
+        }
+      });
+    }
+  });
+  return elig;
+}
+
+// Show a non-blocking loading indicator in the flow area
+function showLoadingState() {
+  var fa = document.getElementById('flow-columns');
+  if (fa) fa.innerHTML =
+    '<div style="padding:60px 48px;color:#6b7280;font-size:13px;display:flex;align-items:center;gap:10px;">' +
+    '<svg width="18" height="18" viewBox="0 0 18 18" style="animation:spin 1s linear infinite;flex-shrink:0">' +
+    '<circle cx="9" cy="9" r="7" fill="none" stroke="#d1d5db" stroke-width="2"/>' +
+    '<path d="M9 2a7 7 0 0 1 7 7" fill="none" stroke="#0f62fe" stroke-width="2" stroke-linecap="round"/>' +
+    '</svg>Loading partner data from Maximo BP Master.xlsx…</div>';
+}
+
+// Show a persistent error banner in the flow area
+function showLoadError(msg) {
+  var fa = document.getElementById('flow-columns');
+  if (fa) fa.innerHTML =
+    '<div style="padding:40px 48px;max-width:540px;">' +
+    '<div style="font-size:13px;font-weight:700;color:#dc2626;margin-bottom:8px;">Failed to load partner data</div>' +
+    '<div style="font-size:12px;color:#374151;line-height:1.6;">' + msg + '</div>' +
+    '<div style="margin-top:12px;font-size:11px;color:#6b7280;">Make sure <strong>Maximo BP Master.xlsx</strong> is in the same folder as this HTML file and the page is served over HTTP (not opened as a local file).</div>' +
+    '</div>';
+}
+
+// ── Auto-fetch and parse on startup ──
+(function() {
+  // Add spinner keyframe if not already present
+  var styleEl = document.createElement('style');
+  styleEl.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
+  document.head.appendChild(styleEl);
+
+  showLoadingState();
+
+  fetch('Maximo BP Master.xlsx')
+    .then(function(resp) {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status + ' — file not found or server error.');
+      return resp.arrayBuffer();
+    })
+    .then(function(buf) {
+      var wb = XLSX.read(buf, { type: 'array' });
+
+      // Sheet 1: Partner Master
+      var ws1 = wb.Sheets['Partner Master'];
+      if (!ws1) throw new Error('"Partner Master" sheet not found in workbook.');
+      var masterRows = XLSX.utils.sheet_to_json(ws1, { defval: '' });
+
+      // Sheet 2: Partner Why Match
+      var ws2 = wb.Sheets['Partner Why Match'];
+      var whyRows = ws2 ? XLSX.utils.sheet_to_json(ws2, { defval: '' }) : [];
+
+      // Build data
+      var loaded = buildPartners(masterRows);
+      var elig   = buildEligibilityAndStrengths(whyRows, loaded);
+
+      // Swap into live globals
+      Object.keys(PARTNERS).forEach(function(k) { delete PARTNERS[k]; });
+      Object.keys(loaded).forEach(function(k) { PARTNERS[k] = loaded[k]; });
+      Object.keys(PARTNER_ELIGIBILITY).forEach(function(k) { delete PARTNER_ELIGIBILITY[k]; });
+      Object.keys(elig).forEach(function(k) { PARTNER_ELIGIBILITY[k] = elig[k]; });
+
+      console.log('[Partner Advisor] Loaded ' + Object.keys(PARTNERS).length +
+        ' partners, ' + Object.keys(PARTNER_ELIGIBILITY).length + ' eligibility rules from Maximo BP Master.xlsx');
+      renderFlow();
+    })
+    .catch(function(err) {
+      console.error('[Partner Advisor] Spreadsheet load failed:', err);
+      showLoadError(err.message);
+    });
+})();
+
+// ═══════════════════════════════════════════════════
+// BOOT  (renderFlow is called inside the fetch .then above)
+// ═══════════════════════════════════════════════════
+
+// ── Splash: dot-network canvas ──
+(function() {
+  var canvas = document.getElementById('splash-canvas');
+  var ctx    = canvas.getContext('2d');
+  var nodes  = [];
+  var NODE_COUNT = 38;
+  var MAX_DIST   = 160;
+  var raf;
+
+  function resize() {
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+
+  function init() {
+    resize();
+    nodes = [];
+    for (var i = 0; i < NODE_COUNT; i++) {
+      nodes.push({
+        x:  Math.random() * canvas.width,
+        y:  Math.random() * canvas.height,
+        vx: (Math.random() - .5) * .32,
+        vy: (Math.random() - .5) * .32,
+        r:  1.5 + Math.random() * 1.5
+      });
+    }
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // edges
+    for (var i = 0; i < nodes.length; i++) {
+      for (var j = i + 1; j < nodes.length; j++) {
+        var dx = nodes[i].x - nodes[j].x;
+        var dy = nodes[i].y - nodes[j].y;
+        var d  = Math.sqrt(dx*dx + dy*dy);
+        if (d < MAX_DIST) {
+          ctx.beginPath();
+          ctx.moveTo(nodes[i].x, nodes[i].y);
+          ctx.lineTo(nodes[j].x, nodes[j].y);
+          ctx.strokeStyle = 'rgba(15,98,254,' + (.07 * (1 - d / MAX_DIST)) + ')';
+          ctx.lineWidth = .8;
+          ctx.stroke();
+        }
+      }
+    }
+    // dots
+    for (var i = 0; i < nodes.length; i++) {
+      ctx.beginPath();
+      ctx.arc(nodes[i].x, nodes[i].y, nodes[i].r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(15,98,254,.18)';
+      ctx.fill();
+      // drift
+      nodes[i].x += nodes[i].vx;
+      nodes[i].y += nodes[i].vy;
+      if (nodes[i].x < 0 || nodes[i].x > canvas.width)  nodes[i].vx *= -1;
+      if (nodes[i].y < 0 || nodes[i].y > canvas.height) nodes[i].vy *= -1;
+    }
+    raf = requestAnimationFrame(draw);
+  }
+
+  init();
+  draw();
+  window.addEventListener('resize', function() { resize(); });
+
+  // ── Dismiss on any click ──
+  var splash  = document.getElementById('splash');
+  var appWrap = document.getElementById('app-wrap');
+  var dismissed = false;
+
+  splash.addEventListener('click', function() {
+    if (dismissed) return;
+    dismissed = true;
+    cancelAnimationFrame(raf);
+    splash.classList.add('splash-hidden');
+    appWrap.classList.add('app-visible');
+    splash.addEventListener('transitionend', function() {
+      splash.style.display = 'none';
+    }, { once: true });
+  });
+})();
+</script>
+</body>
+</html>
